@@ -1,6 +1,6 @@
 # dnstop
 
-Live DNS query observatory for Linux, with per-process attribution and behavioral threat detection. Every networked program starts with DNS; dnstop shows you what each one is actually asking for, and flags the two patterns that matter for security: domain-generation algorithms and DNS tunneling.
+Live, per-process view of the DNS queries leaving your box, on eBPF. It shows which process asked for what, and flags two behaviors that usually mean something's wrong: domain-generation algorithms (DGA) and DNS tunneling.
 
 ```
 $ yeet run https://github.com/ibrahimmian36/dnstop -- --audit
@@ -12,22 +12,22 @@ Built on [yeet](https://yeet.cx).
 
 ## What it detects
 
-DNS is where a lot of malicious behavior shows itself first, because almost everything resolves a name before it connects. Two patterns are worth catching:
+Most malicious traffic resolves a name before it connects, so DNS is a good place to watch. dnstop looks for two things.
 
-**DGA (domain-generation algorithms).** Malware that can't hardcode its C2 address generates hundreds of random-looking domains and queries them until one resolves. The fingerprint: many high-entropy domain names across many distinct registrable domains. dnstop scores every query's Shannon entropy and flags a process when it crosses both a volume and an entropy threshold. It catches two shapes: a single long-lived process making all the lookups, and the fork-per-query variant that spawns a fresh short-lived process per lookup (caught by aggregating the same signal across PIDs that share a process name).
+**DGA (domain-generation algorithms).** Malware that can't ship a fixed C2 address generates piles of random-looking domains and tries them until one resolves. So you get a process firing off lots of high-entropy names across lots of different registrable domains. dnstop computes the Shannon entropy of every query name and flags a process once it's made enough high-entropy lookups across enough distinct domains. This works whether the malware is one long-running process or the kind that forks a fresh short-lived process per lookup (it aggregates the same signal across PIDs sharing a process name).
 
-**DNS tunneling.** Data exfiltration that encodes bytes into subdomain labels and sends them as queries (`<base32-encoded-chunk>.tunnel.attacker.com`). The fingerprint: many unique subdomains under one registrable domain, with abnormally long labels, often as TXT records. dnstop tracks per-domain subdomain cardinality and max label length.
+**DNS tunneling.** Exfiltration that stuffs data into subdomain labels and ships it out as queries, e.g. `<base32-chunk>.tunnel.attacker.com`. Here you get the opposite shape: tons of unique subdomains under a single registrable domain, with very long labels, often TXT records. dnstop tracks how many distinct subdomains it sees per domain and the longest label.
 
-The two detectors use opposite signals on the registrable-domain axis. DGA spreads across many domains; tunneling concentrates under one. So they don't false-positive on each other, and neither trips on ordinary high-volume traffic.
+Because DGA spreads queries across many domains and tunneling piles them under one, the two checks key off opposite signals. That's also why they don't fire on each other, or on ordinary high-volume traffic.
 
 ## Why it doesn't false-positive on normal traffic
 
-The obvious objection: CDNs use high-entropy hostnames (`d3a1b2c4.cloudfront.net`), and big sites have hundreds of subdomains. Both are handled:
+Two fair objections: CDNs use high-entropy hostnames like `d3a1b2c4.cloudfront.net`, and big sites have hundreds of subdomains. Neither trips dnstop:
 
-- A CDN's hash-like names are all under one registrable domain. DGA detection requires high entropy *across many registrable domains*, so a process hammering cloudfront doesn't trip it.
-- A site with 50 subdomains (`mail.`, `drive.`, `docs.`, ...) has short labels. Tunnel detection requires *long* labels (40+ chars), so normal subdomain variety doesn't trip it.
+- A CDN's hash-like names all sit under one registrable domain. DGA detection needs high entropy *across many* registrable domains, so a process hammering cloudfront stays clean.
+- A site with 50 subdomains (`mail.`, `drive.`, `docs.`, ...) uses short labels. Tunnel detection needs *long* labels (40+ chars), so normal subdomain sprawl stays clean.
 
-Verified against synthetic CDN and multi-subdomain traffic in the test suite.
+Both cases are in the test suite.
 
 ## Verify it works
 
